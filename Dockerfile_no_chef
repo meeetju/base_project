@@ -1,0 +1,45 @@
+# Builder stage
+# The builder stage does not contribute to its size - it is an intermediate step and it is discarded at the end of the build.
+
+# We use the latest Rust stable release as base image
+FROM rust:1.75.0 AS builder
+# Let's switch our working directory to `app` (equivalent to `cd app`)
+# The `app` folder will be created for us by Docker in case it does not
+# exist already.
+WORKDIR /app
+# Install the required system dependencies for our linking configuration
+RUN apt update && apt install lld clang -y
+# Copy all files from our working environment to our Docker image
+COPY . .
+# Force the sqlx to look at the saved metadata in `.sqlx` instead of trying to query a live database while building an imag
+ENV SQLX_OFFLINE true
+# Let's build our binary!
+# We'll use the release profile to make it faaaast
+RUN cargo build --release
+
+# Runtime stage
+
+FROM debian:bookworm-slim AS runtime
+
+WORKDIR /app
+# Install OpenSSL - it is dynamically linked by some of our dependencies
+# Install ca-certificates - it is needed to verify TLS certificates
+# when establishing HTTPS connections
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    # Clean up
+    && apt-get autoremove -y \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
+# Copy the compiled binary from the builder environment
+# to our runtime environment
+COPY --from=builder /app/target/release/base_project base_project
+# We need the configuration file at runtime!
+COPY configuration configuration
+# Set the ENV variable to define the environment used
+ENV APP_ENVIRONMENT production
+# When `docker run` is executed, launch the binary!
+ENTRYPOINT ["./base_project"]
+
+# docker build --tag base_project --file Dockerfile .
+# docker run -p 8000:8000 base_project
